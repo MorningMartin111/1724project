@@ -3,7 +3,7 @@ use gloo_net::eventsource::futures::EventSource;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
-use web_sys::HtmlTextAreaElement;
+use web_sys::{HtmlTextAreaElement, HtmlSelectElement}; // 引入 HtmlSelectElement
 use yew::prelude::*;
 
 // --- 数据结构 ---
@@ -37,10 +37,14 @@ fn app() -> Html {
     let first_session = create_new_session_struct();
     let first_id = first_session.id.clone();
 
+    // 状态定义
     let sessions = use_state(|| vec![first_session]);
     let current_session_id = use_state(|| first_id);
     let input_value = use_state(|| String::new());
     let is_loading = use_state(|| false);
+    
+    // 🔥 新增：用于存储当前选择的模型端口，默认为 "8000"
+    let selected_model_port = use_state(|| "8000".to_string());
 
     let current_session = {
         let sessions_list = (*sessions).clone();
@@ -52,6 +56,7 @@ fn app() -> Html {
 
     // --- 事件处理 ---
 
+    // 1. 新建会话
     let on_new_chat = {
         let sessions = sessions.clone();
         let current_session_id = current_session_id.clone();
@@ -64,6 +69,7 @@ fn app() -> Html {
         })
     };
 
+    // 2. 切换会话
     let on_select_session = {
         let current_session_id = current_session_id.clone();
         Callback::from(move |id: String| {
@@ -71,6 +77,7 @@ fn app() -> Html {
         })
     };
 
+    // 3. 输入框输入
     let on_input = {
         let input_value = input_value.clone();
         Callback::from(move |e: InputEvent| {
@@ -79,12 +86,23 @@ fn app() -> Html {
         })
     };
 
-    // --- 🔥 核心修复：提交逻辑 ---
+    // 🔥 4. 模型切换事件
+    let on_model_change = {
+        let selected_model_port = selected_model_port.clone();
+        Callback::from(move |e: Event| {
+            let input: HtmlSelectElement = e.target_unchecked_into();
+            selected_model_port.set(input.value());
+        })
+    };
+
+    // 5. 提交发送
     let on_submit = {
         let input_value = input_value.clone();
         let sessions = sessions.clone();
         let current_session_id = current_session_id.clone();
         let is_loading = is_loading.clone();
+        // 🔥 捕获当前选择的端口
+        let selected_model_port = selected_model_port.clone();
 
         Callback::from(move |e: SubmitEvent| {
             e.prevent_default();
@@ -93,7 +111,7 @@ fn app() -> Html {
                 return;
             }
 
-            // 1. UI: 添加用户消息和空的 AI 消息占位
+            // UI: 添加用户消息和空的 AI 消息占位
             let mut current_sessions_list = (*sessions).clone();
             if let Some(session) = current_sessions_list.iter_mut().find(|s| s.id == *current_session_id) {
                 if session.messages.is_empty() {
@@ -114,17 +132,20 @@ fn app() -> Html {
             input_value.set(String::new());
             is_loading.set(true);
 
-            // 2. 启动流式请求
+            // 启动流式请求
             let sessions = sessions.clone();
             let current_session_id = current_session_id.clone();
             let is_loading = is_loading.clone();
-            
-            // 🔥 关键点：把刚才更新过的列表传给异步任务
             let mut local_sessions_buffer = current_sessions_list; 
+            
+            // 🔥 获取要使用的端口
+            let port = (*selected_model_port).clone();
 
             spawn_local(async move {
+                // 🔥 动态构建 URL
                 let url = format!(
-                    "http://localhost:8000/chat/stream?prompt={}&max_tokens=200", 
+                    "http://localhost:{}/chat/stream?prompt={}&max_tokens=200", 
+                    port,
                     urlencoding::encode(&prompt)
                 );
                 
@@ -135,13 +156,11 @@ fn app() -> Html {
 
                 while let Ok(Some((_, event))) = stream.try_next().await {
                     if let Some(data) = event.data().as_string() {
-                        // 🔥 修复点：修改本地的 buffer，而不是去取旧的 state
                         if let Some(session) = local_sessions_buffer.iter_mut().find(|s| s.id == *current_session_id) {
                             if let Some(last_msg) = session.messages.last_mut() {
                                 last_msg.content.push_str(&data);
                             }
                         }
-                        // 将修改后的 buffer 整体推给 UI
                         sessions.set(local_sessions_buffer.clone());
                     }
                 }
@@ -155,12 +174,12 @@ fn app() -> Html {
     let on_keydown = {
         Callback::from(move |e: KeyboardEvent| {
             if e.key() == "Enter" && !e.shift_key() {
-                // 可以在这里触发提交
+                // 这里可以留空，或者调用 prevent default
             }
         })
     };
 
-    // --- 视图渲染 (保持不变) ---
+    // --- 视图渲染 ---
     let sidebar_list_view = sessions.iter().map(|session| {
         let id = session.id.clone();
         let is_active = session.id == *current_session_id;
@@ -213,7 +232,24 @@ fn app() -> Html {
     html! {
         <div class="flex h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
             <div class="w-64 bg-black flex flex-col border-r border-gray-800 hidden md:flex">
-                <div class="p-3">
+                
+                // --- Sidebar 顶部 ---
+                <div class="p-3 space-y-2">
+                    // 🔥 模型选择下拉菜单
+                    <div class="relative">
+                        <select 
+                            onchange={on_model_change}
+                            class="w-full bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-md focus:ring-green-500 focus:border-green-500 block p-2.5 appearance-none cursor-pointer"
+                        >
+                            <option value="8000" selected={*selected_model_port == "8000"}>{"Llama 2 (Port 8000)"}</option>
+                            <option value="8001" selected={*selected_model_port == "8001"}>{"Mistral (Port 8001)"}</option>
+                        </select>
+                        // 下拉箭头图标
+                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
+                    </div>
+
                     <button 
                         onclick={on_new_chat}
                         class="flex items-center gap-3 w-full px-3 py-3 rounded-md border border-gray-700 hover:bg-gray-900 transition-colors text-sm text-white text-left"
@@ -222,6 +258,7 @@ fn app() -> Html {
                         <span>{"New chat"}</span>
                     </button>
                 </div>
+
                 <div class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
                     <div class="text-xs font-semibold text-gray-500 px-3 py-2">{"History"}</div>
                     { sidebar_list_view }
@@ -236,7 +273,7 @@ fn app() -> Html {
 
             <div class="flex-1 flex flex-col h-full relative bg-gray-800">
                 <div class="h-14 border-b border-gray-700/50 flex items-center justify-between px-4 bg-gray-800 text-gray-200">
-                    <div class="font-medium">{"TinyLlama Chat"}</div>
+                    <div class="font-medium">{"AI Chat"}</div>
                 </div>
 
                 <div class="flex-1 overflow-y-auto p-4 md:p-0">
