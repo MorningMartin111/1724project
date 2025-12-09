@@ -79,7 +79,7 @@ fn app() -> Html {
         })
     };
 
-    // --- 核心提交逻辑 ---
+    // --- 🔥 核心修复：提交逻辑 ---
     let on_submit = {
         let input_value = input_value.clone();
         let sessions = sessions.clone();
@@ -93,7 +93,7 @@ fn app() -> Html {
                 return;
             }
 
-            // 1. UI: 添加用户消息
+            // 1. UI: 添加用户消息和空的 AI 消息占位
             let mut current_sessions_list = (*sessions).clone();
             if let Some(session) = current_sessions_list.iter_mut().find(|s| s.id == *current_session_id) {
                 if session.messages.is_empty() {
@@ -104,14 +104,13 @@ fn app() -> Html {
                     role: "user".to_string(),
                     content: prompt.clone(),
                 });
-                // 预留 AI 消息位
                 session.messages.push(Message {
                     id: Uuid::new_v4().to_string(),
                     role: "assistant".to_string(),
-                    content: String::new(),
+                    content: String::new(), // 此时是空的
                 });
             }
-            sessions.set(current_sessions_list);
+            sessions.set(current_sessions_list.clone()); // 更新 UI
             input_value.set(String::new());
             is_loading.set(true);
 
@@ -120,6 +119,9 @@ fn app() -> Html {
             let current_session_id = current_session_id.clone();
             let is_loading = is_loading.clone();
             
+            // 🔥 关键点：把刚才更新过的列表传给异步任务
+            let mut local_sessions_buffer = current_sessions_list; 
+
             spawn_local(async move {
                 let url = format!(
                     "http://localhost:8000/chat/stream?prompt={}&max_tokens=200", 
@@ -128,23 +130,19 @@ fn app() -> Html {
                 
                 web_sys::console::log_1(&format!("Connecting to: {}", url).into());
 
-                // 创建 EventSource
                 let mut es = EventSource::new(&url).unwrap();
-                // 订阅 "message" 事件，这必须与后端 .event("message") 对应
                 let mut stream = es.subscribe("message").unwrap();
 
-                // 循环接收
                 while let Ok(Some((_, event))) = stream.try_next().await {
                     if let Some(data) = event.data().as_string() {
-                        // web_sys::console::log_1(&format!("Chunk: {}", data).into()); // 调试用
-                        
-                        let mut list = (*sessions).clone();
-                        if let Some(session) = list.iter_mut().find(|s| s.id == *current_session_id) {
+                        // 🔥 修复点：修改本地的 buffer，而不是去取旧的 state
+                        if let Some(session) = local_sessions_buffer.iter_mut().find(|s| s.id == *current_session_id) {
                             if let Some(last_msg) = session.messages.last_mut() {
                                 last_msg.content.push_str(&data);
                             }
                         }
-                        sessions.set(list);
+                        // 将修改后的 buffer 整体推给 UI
+                        sessions.set(local_sessions_buffer.clone());
                     }
                 }
                 
@@ -157,13 +155,12 @@ fn app() -> Html {
     let on_keydown = {
         Callback::from(move |e: KeyboardEvent| {
             if e.key() == "Enter" && !e.shift_key() {
-                // 可以在这里触发提交，目前留空
+                // 可以在这里触发提交
             }
         })
     };
 
-    // --- 视图渲染 ---
-
+    // --- 视图渲染 (保持不变) ---
     let sidebar_list_view = sessions.iter().map(|session| {
         let id = session.id.clone();
         let is_active = session.id == *current_session_id;
