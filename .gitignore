@@ -1,0 +1,14 @@
+﻿# 忽略特定文件夹
+candle-chat-backend/models/
+candle-chat-backend/target/
+frontend/dist/
+frontend/target/
+
+# 通用忽略
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+*.tmp
+*.temp
