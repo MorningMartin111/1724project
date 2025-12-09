@@ -1,0 +1,24 @@
+# === Rust build artifacts ===
+/target/
+/debug/
+/release/
+
+# === IDE / Editor files ===
+/.vscode/
+/.idea/
+*.swp
+*.swo
+
+# === OS files ===
+.DS_Store
+
+# === Model files (exclude everything in models/) ===
+models/
+
+# === Python download helpers ===
+*.pyc
+__pycache__/
+
+# === Allow only source code + Cargo files ===
+# (Everything else will be ignored unless expli
+/target

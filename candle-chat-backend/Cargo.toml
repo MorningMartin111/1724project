@@ -16,10 +16,6 @@ candle-nn = "0.9"
 candle-transformers = "0.9"
 tokenizers = "0.15"
 
-<<<<<<< HEAD
 # 流式处理相关
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.5", features = ["cors"] }
-=======
-tokio-stream = { version = "0.1", features = ["sync"] }
->>>>>>> 7a255ec0f74a079ba61154d4fd744195b4514dd1
