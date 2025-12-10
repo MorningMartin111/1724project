@@ -3,6 +3,7 @@ use futures::stream::StreamExt;
 use futures::TryStreamExt;
 use gloo_net::eventsource::futures::EventSource;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlSelectElement, HtmlTextAreaElement};
@@ -13,6 +14,8 @@ use yew::prelude::*;
 struct ApiMessage {
     role: String,
     content: String,
+    #[serde(default)]
+    created_at: Option<String>, // from DB; optional so it won't break
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +62,7 @@ fn app() -> Html {
     let selected_model_port = use_state(|| "8000".to_string());
 
     // Fetch chat history on startup
+    // Fetch chat history on startup from BOTH servers (8000 + 8001)
     {
         let sessions = sessions.clone();
 
@@ -66,49 +70,92 @@ fn app() -> Html {
             spawn_local(async move {
                 use gloo_net::http::Request;
 
-                if let Ok(resp) = Request::get("http://localhost:8001/history").send().await {
-                    if let Ok(api_sessions) = resp.json::<Vec<ApiSession>>().await {
-                        let mapped_sessions: Vec<Session> = api_sessions
+                // Helper to fetch history from a single base URL
+                async fn fetch_history_from(base_url: &str) -> Vec<ApiSession> {
+                    let url = format!("{base_url}/history");
+                    if let Ok(resp) = Request::get(&url).send().await {
+                        if let Ok(api_sessions) = resp.json::<Vec<ApiSession>>().await {
+                            return api_sessions;
+                        }
+                    }
+                    Vec::new()
+                }
+
+                // 1) fetch from TinyLlama (8000) and Qwen (8001)
+                let history_8000 = fetch_history_from("http://localhost:8000").await;
+                let history_8001 = fetch_history_from("http://localhost:8001").await;
+
+                // 2) merge sessions with the same session_id (TinyLlama + Qwen parts)
+                let mut map: HashMap<String, ApiSession> = HashMap::new();
+
+                for mut s in history_8000.into_iter().chain(history_8001.into_iter()) {
+                    map.entry(s.session_id.clone())
+                        .and_modify(|existing| {
+                            // merge messages from both sources
+                            let mut all = Vec::new();
+                            all.extend(existing.messages.drain(..));
+                            all.extend(s.messages.drain(..));
+
+                            // sort by created_at if present, otherwise keep order
+                            all.sort_by(|a, b| {
+                                let a_ts = a.created_at.as_deref().unwrap_or("");
+                                let b_ts = b.created_at.as_deref().unwrap_or("");
+                                a_ts.cmp(b_ts)
+                            });
+
+                            existing.messages = all;
+                        })
+                        .or_insert(s);
+                }
+
+                let mut merged: Vec<ApiSession> = map.into_values().collect();
+
+                // 3) sort by created_at DESC (SQLite default format is lexicographically sortable)
+                merged.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+                // 4) map to UI Session structs
+                let mapped_sessions: Vec<Session> = merged
+                    .into_iter()
+                    .map(|api| {
+                        // title = first few words of first user message
+                        let raw_title = api
+                            .messages
+                            .iter()
+                            .find(|m| m.role == "user")
+                            .map(|m| {
+                                m.content
+                                    .trim()
+                                    .split_whitespace()
+                                    .take(6) // first ~6 words
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .unwrap_or_else(|| "Chat history".to_string());
+
+                        let title: String = raw_title.chars().take(20).collect();
+
+                        let messages: Vec<Message> = api
+                            .messages
                             .into_iter()
-                            .map(|api| {
-                                // 🧠 pick a title from the first user message
-                                let raw_title = api
-                                    .messages
-                                    .iter()
-                                    .find(|m| m.role == "user")
-                                    .map(|m| {
-                                        m.content
-                                            .trim()
-                                            .split_whitespace()
-                                            .take(6) // first ~6 words
-                                            .collect::<Vec<_>>()
-                                            .join(" ")
-                                    })
-                                    .unwrap_or_else(|| "Chat history".to_string());
-
-                                let title: String = raw_title.chars().take(20).collect();
-
-                                let messages: Vec<Message> = api
-                                    .messages
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(idx, m)| Message {
-                                        id: format!("{}-{}", api.session_id, idx),
-                                        role: m.role,
-                                        content: m.content,
-                                    })
-                                    .collect();
-
-                                Session {
-                                    id: api.session_id,
-                                    title,
-                                    messages,
-                                }
+                            .enumerate()
+                            .map(|(idx, m)| Message {
+                                id: format!("{}-{}", api.session_id, idx),
+                                role: m.role,
+                                content: m.content,
                             })
                             .collect();
 
-                        sessions.set(mapped_sessions);
-                    }
+                        Session {
+                            id: api.session_id,
+                            title,
+                            messages,
+                        }
+                    })
+                    .collect();
+
+                // If DB is empty, keep the default "New Chat" session
+                if !mapped_sessions.is_empty() {
+                    sessions.set(mapped_sessions);
                 }
             });
 
