@@ -9,7 +9,6 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 
-// --- 数据结构 ---
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct ApiMessage {
     role: String,
@@ -47,14 +46,11 @@ fn create_new_session_struct() -> Session {
     }
 }
 
-// --- 主组件 ---
-
 #[function_component(App)]
 fn app() -> Html {
     let first_session = create_new_session_struct();
     let first_id = first_session.id.clone();
 
-    // 状态定义
     let sessions = use_state(|| vec![first_session]);
     let current_session_id = use_state(|| first_id);
     let input_value = use_state(|| String::new());
@@ -163,7 +159,6 @@ fn app() -> Html {
         });
     }
 
-    // 用于存储停止信号的发送端
     let abort_handle = use_mut_ref(|| None::<oneshot::Sender<()>>);
 
     let current_session = {
@@ -175,9 +170,6 @@ fn app() -> Html {
             .unwrap_or_else(create_new_session_struct)
     };
 
-    // --- 事件处理 ---
-
-    // 1. 核心停止逻辑
     let stop_chat = {
         let is_loading = is_loading.clone();
         let abort_handle = abort_handle.clone();
@@ -189,7 +181,6 @@ fn app() -> Html {
         })
     };
 
-    // 2. 停止按钮点击事件
     let on_stop_click = {
         let stop_chat = stop_chat.clone();
         Callback::from(move |_: MouseEvent| {
@@ -197,14 +188,13 @@ fn app() -> Html {
         })
     };
 
-    // 3. 新建会话
     let on_new_chat = {
         let sessions = sessions.clone();
         let current_session_id = current_session_id.clone();
         let stop_chat = stop_chat.clone();
 
         Callback::from(move |_| {
-            stop_chat.emit(()); // 先停止当前
+            stop_chat.emit(());
 
             let new_session = create_new_session_struct();
             let mut new_list = (*sessions).clone();
@@ -214,7 +204,6 @@ fn app() -> Html {
         })
     };
 
-    // 4. 切换会话
     let on_select_session = {
         let current_session_id = current_session_id.clone();
         Callback::from(move |id: String| {
@@ -222,7 +211,6 @@ fn app() -> Html {
         })
     };
 
-    // 5. 输入框输入
     let on_input = {
         let input_value = input_value.clone();
         Callback::from(move |e: InputEvent| {
@@ -231,7 +219,6 @@ fn app() -> Html {
         })
     };
 
-    // 6. 模型切换
     let on_model_change = {
         let selected_model_port = selected_model_port.clone();
         Callback::from(move |e: Event| {
@@ -240,7 +227,6 @@ fn app() -> Html {
         })
     };
 
-    // 7. 提交发送 (这里修复了所有权问题)
     let on_submit = {
         let input_value = input_value.clone();
         let sessions = sessions.clone();
@@ -288,7 +274,6 @@ fn app() -> Html {
             input_value.set(String::new());
             is_loading.set(true);
 
-            // 准备异步任务
             let sessions = sessions.clone();
             let current_session_id_handle = current_session_id.clone();
             let is_loading = is_loading.clone();
@@ -298,11 +283,9 @@ fn app() -> Html {
             // extract actual session_id String from state handle
             let session_id = (*current_session_id_handle).clone();
 
-            // 设置停止信号
             let (tx, rx) = oneshot::channel();
             *abort_handle.borrow_mut() = Some(tx);
 
-            // 克隆 abort_handle 给异步任务使用
             let abort_handle = abort_handle.clone();
 
             spawn_local(async move {
@@ -361,7 +344,6 @@ fn app() -> Html {
         })
     };
 
-    // --- 视图渲染 ---
     let sidebar_list_view = sessions.iter().map(|session| {
         let id = session.id.clone();
         let is_active = session.id == *current_session_id;
