@@ -1,31 +1,29 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use axum::{extract::State, routing::post, Json, Router};
-use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::generation::LogitsProcessor;
-
-use candle_transformers::models::llama::{Cache as LlamaCache, Config, Llama, LlamaConfig};
-use serde::{Deserialize, Serialize};
-use tokenizers::Tokenizer;
-use tokio::net::TcpListener;
-
 use axum::extract::Query;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::{extract::State, routing::post, Json, Router};
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::VarBuilder;
+use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::qwen2::{Config as QwenConfig, ModelForCausalLM};
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use tokenizers::Tokenizer;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
 use tokio_stream::wrappers::ReceiverStream;
-
-use candle_core::{Error as CandleError, IndexOp, Result as CandleResult};
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 struct AppState {
-    model: Arc<Llama>,
-    config: Config,
+    // Qwen2 uses an internal KV cache, so the model is mutable.
+    // We wrap it in Arc<Mutex<..>> so we can use it safely from spawn_blocking.
+    model: Arc<Mutex<ModelForCausalLM>>,
+    config: QwenConfig,
     dtype: DType,
     device: Device,
     tokenizer: Arc<Tokenizer>,
@@ -56,7 +54,7 @@ fn default_max_tokens() -> usize {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let state = load_tinyllama_state()?;
+    let state = load_qwen_state()?;
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -69,8 +67,8 @@ async fn main() -> Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr: std::net::SocketAddr = "0.0.0.0:8000".parse().unwrap();
-    println!("🚀 Candle TinyLlama server running on http://{addr}");
+    let addr: std::net::SocketAddr = "0.0.0.0:8001".parse().unwrap();
+    println!("🚀 Candle Qwen2 0.5B Instruct server running on http://{addr}");
 
     let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -82,49 +80,55 @@ async fn chat_stream_handler(
     State(state): State<AppState>,
     Query(params): Query<ChatStreamQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    // --- 新增日志 ---
-    println!("收到前端请求！正在准备生成: {}", params.prompt);
+    println!("收到前端请求 (Qwen2)！Prompt: {}", params.prompt);
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(16);
 
+    // Move state + params into a blocking thread for CPU-bound generation.
     spawn_blocking(move || {
-        run_streaming_generation(state, params, tx);
+        run_streaming_generation_qwen(state, params, tx);
     });
 
     let stream = ReceiverStream::new(rx);
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-fn run_streaming_generation(
+fn run_streaming_generation_qwen(
     state: AppState,
     params: ChatStreamQuery,
     tx: mpsc::Sender<Result<Event, Infallible>>,
 ) {
-    let model = Arc::clone(&state.model);
+    let model_arc = Arc::clone(&state.model);
     let tokenizer = Arc::clone(&state.tokenizer);
     let device = state.device.clone();
 
     let result: anyhow::Result<()> = (|| {
-        println!("--> 开始创建 Cache...");
-        let mut cache = LlamaCache::new(true, state.dtype, &state.config, &device)?;
+        println!("--> [Qwen2] 获取模型锁...");
+        let mut model = model_arc
+            .lock()
+            .map_err(|_| anyhow::anyhow!("failed to lock Qwen2 model"))?;
 
-        println!("--> Cache 创建成功，开始编码 Prompt...");
+        // New request → clear cached KV
+        model.clear_kv_cache();
+
+        println!("--> [Qwen2] 开始编码 Prompt...");
         let encoding = tokenizer
             .encode(params.prompt.clone(), true)
             .map_err(candle_core::Error::msg)?;
         let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
 
+        // You can change EOS to the proper Qwen2 eos if needed
         let eos_token = tokenizer.get_vocab(true).get("</s>").copied().unwrap_or(2);
 
-        let mut start_pos: usize = 0;
+        let mut seqlen_offset: usize = 0;
+        let mut prev_text_len: usize = 0;
+
         let seed = 42;
         let temperature = Some(0.7);
         let top_p = Some(0.9);
         let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p);
 
-        let mut prev_text_len = 0usize;
-
-        println!("--> 进入生成循环...");
+        println!("--> [Qwen2] 进入生成循环...");
         for step in 0..params.max_tokens {
             let context_size = if step > 0 { 1 } else { tokens.len() };
             let start_at = tokens.len().saturating_sub(context_size);
@@ -132,15 +136,27 @@ fn run_streaming_generation(
 
             let input = Tensor::new(ctx, &device)?.reshape((1, ctx.len()))?;
 
-            let logits = model.forward(&input, start_pos, &mut cache)?;
-            start_pos += ctx.len();
+            // Forward pass – Qwen2 returns [batch, seq_len, vocab]
+            let logits = model.forward(&input, seqlen_offset)?;
+            seqlen_offset += ctx.len();
 
-            let logits = logits.i(0)?.to_dtype(DType::F32)?;
+            // Inspect dims if you want to debug
+            // println!("[Qwen2] logits dims: {:?}", logits.dims());
+
+            // Take batch = 0 and the *last* sequence position
+            let dims = logits.dims();
+            let last_pos = dims[1] - 1; // seq_len - 1
+
+            let logits = logits
+                .i((0, last_pos))? // -> [vocab]
+                .to_dtype(DType::F32)?; // still [vocab], now f32
+
             let next_token = logits_processor.sample(&logits)?;
+
             tokens.push(next_token);
 
             if next_token == eos_token {
-                println!("--> 生成结束 (遇到 EOS)");
+                println!("--> [Qwen2] 生成结束 (遇到 EOS)");
                 break;
             }
 
@@ -148,8 +164,11 @@ fn run_streaming_generation(
                 .decode(&tokens, true)
                 .map_err(candle_core::Error::msg)?;
 
-            // 打印进度，证明没卡死
-            println!("--> 生成第 {} 步: 当前文本长度 {}", step, full_text.len());
+            println!(
+                "--> [Qwen2] 生成第 {} 步: 当前文本长度 {}",
+                step,
+                full_text.len()
+            );
 
             if full_text.len() > prev_text_len {
                 let new_part = &full_text[prev_text_len..];
@@ -158,21 +177,22 @@ fn run_streaming_generation(
                     let event = Event::default().event("message").data(new_part.to_string());
 
                     if tx.blocking_send(Ok(event)).is_err() {
-                        println!("--> 前端断开了连接");
+                        println!("--> [Qwen2] 前端断开了连接");
                         break;
                     }
                     prev_text_len = full_text.len();
                 }
             }
         }
+
         Ok(())
     })();
 
     if let Err(err) = result {
-        println!("!!! 生成过程出错: {}", err);
+        println!("!!! [Qwen2] 生成过程出错: {err}");
         let _ = tx.blocking_send(Ok(Event::default()
             .event("message")
-            .data(format!("\n[Error: {}]", err))));
+            .data(format!("\n[Qwen2 Error: {err}]"))));
     }
 }
 
@@ -181,31 +201,33 @@ async fn chat_handler(
     Json(_req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, axum::http::StatusCode> {
     Ok(Json(ChatResponse {
-        response: "Please use /chat/stream for now.".to_string(),
+        response: "Please use /chat/stream for Qwen2 as well.".to_string(),
     }))
 }
 
-fn load_tinyllama_state() -> Result<AppState> {
-    let model_dir = PathBuf::from("models/tinyllama");
+fn load_qwen_state() -> Result<AppState> {
+    // Adjust this path to wherever you stored qwen2_0_5b_instruct
+    let model_dir = PathBuf::from("models/qwen2_0_5b_instruct");
     let tokenizer_path = model_dir.join("tokenizer.json");
+
     let tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow::anyhow!("tokenizer error: {e}"))?;
 
+    // Qwen2 uses its own Config struct directly
     let config_bytes = std::fs::read(model_dir.join("config.json"))?;
-    let llama_config: LlamaConfig = serde_json::from_slice(&config_bytes)?;
-
-    let config = llama_config.into_config(false);
+    let qwen_config: QwenConfig = serde_json::from_slice(&config_bytes)?;
 
     let filenames = vec![model_dir.join("model.safetensors")];
-    let device = Device::Cpu;
+
+    let device = Device::Cpu; // change to cuda/metal if you’ve built with those features
     let dtype = DType::F32;
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Llama::load(vb, &config)?;
+    let model = ModelForCausalLM::new(&qwen_config, vb)?;
 
     Ok(AppState {
-        model: Arc::new(model),
-        config,
+        model: Arc::new(Mutex::new(model)),
+        config: qwen_config,
         dtype,
         device,
         tokenizer: Arc::new(tokenizer),

@@ -1,6 +1,8 @@
 ﻿# 忽略特定文件夹
 candle-chat-backend/models/
 candle-chat-backend/target/
+server-qwen/models/
+server-qwen/target/
 frontend/dist/
 frontend/target/
 
