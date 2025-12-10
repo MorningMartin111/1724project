@@ -1,4 +1,4 @@
-# Final Report: RusChat - A Local, Privacy-First LLM Inference Service
+# RusChat - A Local, Privacy-First LLM Inference Service
 
 ## Team Members
 *   **Ruoming Ren** (1005889013) - 
@@ -11,7 +11,7 @@
 In the current landscape of Large Language Models (LLMs), Python dominates due to its rich ecosystem. However, for a local, privacy-focused inference service, Python introduces significant overhead in terms of runtime latency and memory management (Garbage Collection pauses).
 
 We chose **Rust** for this project to solve specific engineering challenges that Python cannot address effectively:
-1.  **Deterministic Latency & Memory Safety:** LLM inference is memory-intensive. Rust’s ownership model ensures memory safety without a Garbage Collector, preventing the "stop-the-world" pauses that disrupt the user experience during real-time token streaming.
+1.  **Latency & Memory Safety:** LLM inference is memory-intensive. Rust’s ownership model ensures memory safety without a Garbage Collector, preventing the "stop-the-world" pauses that disrupt the user experience during real-time token streaming.
 2.  **Zero-Cost Abstractions:** By using the **Candle** framework, we leverage Rust’s ability to interact directly with low-level tensor operations (similar to C++) while maintaining high-level code safety. This allows us to run quantized models (like Qwen2 and TinyLlama) on consumer CPUs efficiently.
 3.  **Unified Full-Stack WebAssembly:** Unlike a traditional stack (Python Backend + JS Frontend), Rust allows us to compile our frontend (Yew) to **WebAssembly (Wasm)**. This enables type sharing and ensures that the high-performance characteristics of Rust extend to the browser client.
 4.  **Concurrency:** Rust’s `Tokio` async runtime is uniquely suited for handling multiple concurrent Server-Sent Events (SSE) streams, allowing the server to handle multiple chat sessions without blocking threads.
@@ -22,10 +22,44 @@ The primary objective of RusChat is to build a fully self-contained, local chatb
 Key technical objectives include:
 *   **Microservices Architecture:** Deploying different models (TinyLlama vs. Qwen2) as independent services on different ports to isolate failures and manage resources.
 *   **Native Inference:** Implementing LLM inference purely in Rust using `candle-core` and `candle-transformers`, removing the dependency on heavy Python runtimes like PyTorch in production.
-*   **Persistent Context:** Implementing a storage layer using **SQLite** (via SQLx) to persist chat history locally, allowing users to review past conversations.
+*   **Persistent Context:** Implementing a storage layer using **SQLite** to persist chat history locally, allowing users to review past conversations.
 *   **Real-Time Streaming:** Implementing a robust SSE (Server-Sent Events) pipeline to stream generated tokens to the frontend instantly.
 
-## 3. Features
+
+## 3. System Architecture
+The system follows a microservices-inspired architecture to ensure modularity and fault tolerance. The Frontend acts as an orchestrator, communicating with two independent inference backends via HTTP and Server-Sent Events (SSE).
+
+```mermaid
+graph TD
+    User[User / Browser] <-->|Wasm Interaction| Frontend[Rust Yew Frontend]
+    
+    subgraph "Client Side (WebAssembly)"
+        Frontend
+    end
+
+    subgraph "Local Host Services"
+        Frontend --"SSE Stream (Port 8000)"--> Backend1[TinyLlama Service]
+        Frontend --"SSE Stream (Port 8001)"--> Backend2[Qwen2 Service]
+        
+        Backend1 --"Candle Inference"--> Model1[TinyLlama Model]
+        Backend2 --"Candle Inference"--> Model2[Qwen2 Model]
+        Backend2 <--"SQLx"--> DB[(SQLite Database)]
+    end
+```
+#### Technical Stack Highlights
+To achieve a fully local and high-performance system, we integrated the following technologies:
+
+*   **Local Execution:** Runs fully on local hardware (CPU) with no cloud dependencies.
+*   **Axum Backend:** RESTful API endpoints for session management and chat streaming.
+*   **Multi-Model Support:** Preloads **TinyLlama and Qwen2** models using the `Candle` framework.
+*   **Persistent Storage:** **SQLite** database (via `sqlx`) retains chat histories and model associations.
+*   **Streaming Responses:** Real-time token-by-token generation using Server-Sent Events (SSE).
+*   **Rust Frontend (Yew + WASM):** Interactive, type-safe interface compiled for the web.
+*   **Trunk Build System:** Enables fast iteration and automatic hot reload during development.
+*   **System Integration:** Utilized `gloo-net` and `web-sys` for robust WASM-to-Backend communication.
+
+
+## 4. Features
 The final deliverable includes the following key features:
 
 ### A. Dual-Model Backend Architecture
@@ -40,11 +74,11 @@ Unlike the initial proposal (which suggested PostgreSQL), we migrated to **SQLit
 
 ### C. Rust-Based Frontend (Yew + Wasm)
 The user interface is built entirely in Rust using the **Yew** framework.
-*   **Dynamic Model Switching:** Users can toggle between "Llama 2" (Port 8000) and "Mistral/Qwen" (Port 8001) via a dropdown menu.
+*   **In-Session Model Switching:** Users can dynamically toggle between "Llama 2" (Port 8000) and "Mistral/Qwen" (Port 8001) **within the same chat session**. This enables a hybrid workflow where a user can use the faster Llama model for simple greetings and seamlessly switch to the smarter Qwen model for complex queries without losing the conversation context.
 *   **Streaming UI:** The chat interface updates in real-time as tokens arrive via SSE, with support for stopping generation mid-stream.
 *   **Sidebar Navigation:** A history sidebar allows users to switch between different chat sessions seamlessly.
 
-## 4. User’s Guide
+## 5. User’s Guide
 1.  **Launch the System:** Ensure both backends and the frontend are running (see Reproducibility Guide).
 2.  **Access the UI:** Open your browser to `http://localhost:8080`.
 3.  **Select a Model:** Use the dropdown in the top-left corner to choose a model backend (Port 8000 for fast chat, Port 8001 for history-enabled chat).
@@ -52,7 +86,7 @@ The user interface is built entirely in Rust using the **Yew** framework.
 5.  **Stop Generation:** If the answer is too long, click the Red Stop button to interrupt the stream.
 6.  **View History:** Click "New Chat" to start fresh, or select a previous session from the left sidebar to load old messages.
 
-## 5. Reproducibility Guide
+## 6. Reproducibility Guide
 **Note to Instructor:** Please follow these steps sequentially. We assume a standard environment with Rust and Python (for model downloading) installed.
 
 ### Prerequisites
@@ -105,27 +139,35 @@ The user interface is built entirely in Rust using the **Yew** framework.
 *   **Test 2:** Select "Mistral (Port 8001)" (mapped to Qwen internally). Type "Tell me a story". You should see a response.
 *   **Test 3:** Refresh the page. You should see the "Tell me a story" session appear in the History sidebar (loaded from SQLite).
 
-## 6. Contributions
+## 7. Contributions
 
 ### Ruoming Ren
-*   **Core Inference Engine:** Implemented the `candle-transformers` integration for the TinyLlama model (`main.rs` in Backend 1).
-*   **SSE Implementation:** Designed the `run_streaming_generation` loop, handling token encoding/decoding and the critical `[DONE]` signal for frontend termination.
-*   **Backend Architecture:** Set up the Axum server structure, CORS configuration, and the asynchronous task spawning (`spawn_blocking`) to prevent blocking the web server during inference.
+*   **Backend Infrastructure & Inference:** Designed the core Axum server architecture and implemented the candle-transformers integration to run both TinyLlama and Qwen2 models on the CPU.
+*   **SSE Implementation:** Designed the run_streaming_generation loop, handling token encoding/decoding and the critical [DONE] signal for frontend termination.
+*   **Database & Persistence** Engineered the SQLite storage layer using sqlx, handling schema migrations and implementing the logic to persist chat history efficiently.
 
 ### Kairui Zhang
-*   **Database Integration:** Implemented the SQLite layer using `sqlx`, including schema migration and the `save_chat_turn` logic in Backend 2 (`db.rs`).
-*   **Qwen2 Integration:** Ported the logic to support the Qwen2 architecture and connected it with the database persistence layer.
-*   **Frontend Development:** Built the entire Yew application (`main.rs` in Frontend), including:
-    *   State management for chat sessions.
-    *   `EventSource` integration for handling dual-port streaming.
-    *   UI styling with Tailwind CSS.
+*   **Frontend Development:** Built the complete Yew application (main.rs), implementing the UI and managing the  session state for model switching and history navigation.
+*   **Integration & Debugging** Implemented the client-side EventSource logic for real-time streaming and frontend-backend connection to ensure smooth data flow.
 
-## 7. Lessons Learned & Concluding Remarks
+
+**Note on Commit History:**
+During the development process, we utilized separate repositories for the Frontend and Backend components to facilitate parallel development and avoid merge conflicts. The repository submitted here represents the consolidated, final version of our project.
+
+## 7. Project Links
+
+We have prepared a video presentation and a live demo to showcase the project's functionality.
+
+*   **Video Slide Presentation:** [Insert Link Here]
+*   **Video Demo:** [Insert Link Here]
+
+## 8. Lessons Learned & Concluding Remarks
 Throughout this project, we learned several valuable lessons about systems programming in Rust:
 
-1.  **The Rigor of Rust Development:** Rust is an incredibly strict and rigorous language, which made the development process significantly harder and more time-consuming compared to dynamic languages like Python. The strict ownership model and type system forced us to handle every memory allocation and potential error case explicitly. While this "fighting the compiler" phase was difficult and steep, it ensured that our final application was robust and free of common runtime errors.
+1.  **The Rigor of Rust Development:** Rust is an incredibly strict and rigorous language, which made the development process significantly harder and more time-consuming compared to dynamic languages like Python. The strict ownership model and type system forced us to handle every memory allocation and potential error case explicitly. While this phase was difficult and steep, it ensured that our final application was robust and free of common runtime errors.
 2.  **Async Streams are Tricky:** bridging the gap between synchronous CPU-bound model inference and asynchronous I/O-bound web serving was challenging. We learned to effectively use `tokio::task::spawn_blocking` and `mpsc` channels to communicate between these two worlds without freezing the server.
 3.  **Wasm Interop:** Debugging WebAssembly can be difficult. We learned to rely on `gloo-net` and browser console logging to trace errors in the frontend-backend communication.
 
 **Conclusion:**
 RusChat successfully demonstrates that Rust is a viable, high-performance alternative to Python for local AI applications. We achieved our goal of a private, offline-capable chat system with persistent history, proving that the Rust ecosystem (Axum, Candle, Yew, SQLx) is mature enough for complex full-stack AI development.
+
