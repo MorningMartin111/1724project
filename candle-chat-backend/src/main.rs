@@ -114,6 +114,7 @@ fn run_streaming_generation(
             .map_err(candle_core::Error::msg)?;
         let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
 
+        // eos token（找不到就用 2 兜底）
         let eos_token = tokenizer.get_vocab(true).get("</s>").copied().unwrap_or(2);
 
         let mut start_pos: usize = 0;
@@ -139,6 +140,7 @@ fn run_streaming_generation(
             let next_token = logits_processor.sample(&logits)?;
             tokens.push(next_token);
 
+            // 命中 EOS → 提前结束
             if next_token == eos_token {
                 println!("--> 生成结束 (遇到 EOS)");
                 break;
@@ -148,7 +150,6 @@ fn run_streaming_generation(
                 .decode(&tokens, true)
                 .map_err(candle_core::Error::msg)?;
 
-            // 打印进度，证明没卡死
             println!("--> 生成第 {} 步: 当前文本长度 {}", step, full_text.len());
 
             if full_text.len() > prev_text_len {
@@ -157,14 +158,21 @@ fn run_streaming_generation(
                 if !new_part.is_empty() {
                     let event = Event::default().event("message").data(new_part.to_string());
 
+                    // 如果前端断开了，这里会返回 Err，我们就停
                     if tx.blocking_send(Ok(event)).is_err() {
-                        println!("--> 前端断开了连接");
-                        break;
+                        println!("--> 前端断开了连接，停止生成");
+                        return Ok(());
                     }
                     prev_text_len = full_text.len();
                 }
             }
         }
+
+        // 🔥 核心：不管是 max_tokens 跑完还是 EOS break，
+        // 最后都发一个 [DONE]，告诉前端可以结束 SSE 了
+        let _ = tx.blocking_send(Ok(Event::default().event("message").data("[DONE]")));
+        println!("--> 生成循环结束，已发送 [DONE]");
+
         Ok(())
     })();
 
@@ -173,6 +181,8 @@ fn run_streaming_generation(
         let _ = tx.blocking_send(Ok(Event::default()
             .event("message")
             .data(format!("\n[Error: {}]", err))));
+        // 出错时也可以再发一个 [DONE]，避免前端一直等
+        let _ = tx.blocking_send(Ok(Event::default().event("message").data("[DONE]")));
     }
 }
 

@@ -130,59 +130,64 @@ fn run_streaming_generation_qwen(
 
         println!("--> [Qwen2] 进入生成循环...");
         for step in 0..params.max_tokens {
-            let context_size = if step > 0 { 1 } else { tokens.len() };
-            let start_at = tokens.len().saturating_sub(context_size);
-            let ctx = &tokens[start_at..];
+            // Hard cap to avoid insane values from frontend
+            let max_steps = params.max_tokens.min(256);
 
-            let input = Tensor::new(ctx, &device)?.reshape((1, ctx.len()))?;
+            for step in 0..max_steps {
+                let context_size = if step > 0 { 1 } else { tokens.len() };
+                let start_at = tokens.len().saturating_sub(context_size);
+                let ctx = &tokens[start_at..];
 
-            // Forward pass – Qwen2 returns [batch, seq_len, vocab]
-            let logits = model.forward(&input, seqlen_offset)?;
-            seqlen_offset += ctx.len();
+                let input = Tensor::new(ctx, &device)?.reshape((1, ctx.len()))?;
 
-            // Inspect dims if you want to debug
-            // println!("[Qwen2] logits dims: {:?}", logits.dims());
+                // Forward pass – Qwen2 returns [batch, seq_len, vocab]
+                let logits_all = model.forward(&input, seqlen_offset)?;
+                seqlen_offset += ctx.len();
 
-            // Take batch = 0 and the *last* sequence position
-            let dims = logits.dims();
-            let last_pos = dims[1] - 1; // seq_len - 1
+                // dims: [1, seq_len, vocab]
+                let dims = logits_all.dims();
+                let last_pos = dims[1] - 1; // seq_len - 1
 
-            let logits = logits
-                .i((0, last_pos))? // -> [vocab]
-                .to_dtype(DType::F32)?; // still [vocab], now f32
+                // Take batch = 0, last sequence position -> [vocab]
+                let logits = logits_all
+                    .i((0, last_pos))? // -> [vocab]
+                    .to_dtype(DType::F32)?; // logits_processor expects f32
 
-            let next_token = logits_processor.sample(&logits)?;
+                let next_token = logits_processor.sample(&logits)?;
+                tokens.push(next_token);
 
-            tokens.push(next_token);
+                // ---- Stop conditions ----
+                if next_token == eos_token {
+                    println!("--> [Qwen2] 命中 EOS, 结束生成");
+                    break;
+                }
+                if step + 1 == max_steps {
+                    println!("--> [Qwen2] 达到 max_steps = {max_steps}, 结束生成");
+                }
 
-            if next_token == eos_token {
-                println!("--> [Qwen2] 生成结束 (遇到 EOS)");
-                break;
-            }
+                // ---- Streaming text out ----
+                let text = tokenizer
+                    .decode(&tokens, true)
+                    .map_err(|e| anyhow::anyhow!("tokenizer decode error: {e}"))?;
 
-            let full_text = tokenizer
-                .decode(&tokens, true)
-                .map_err(candle_core::Error::msg)?;
+                let new_text = &text[prev_text_len..];
+                prev_text_len = text.len();
 
-            println!(
-                "--> [Qwen2] 生成第 {} 步: 当前文本长度 {}",
-                step,
-                full_text.len()
-            );
-
-            if full_text.len() > prev_text_len {
-                let new_part = &full_text[prev_text_len..];
-
-                if !new_part.is_empty() {
-                    let event = Event::default().event("message").data(new_part.to_string());
-
+                if !new_text.is_empty() {
+                    let event = Event::default().data(new_text.to_string());
                     if tx.blocking_send(Ok(event)).is_err() {
-                        println!("--> [Qwen2] 前端断开了连接");
+                        println!("--> [Qwen2] 客户端已断开, 停止生成");
                         break;
                     }
-                    prev_text_len = full_text.len();
                 }
             }
+
+            // send final DONE event so frontend knows to stop
+            let _ = tx.blocking_send(Ok(Event::default()
+                .event("message") // keep the same event name as normal tokens
+                .data("[DONE]")));
+            println!("--> [Qwen2] 发送 DONE 事件, 结束生成");
+            break;
         }
 
         Ok(())
