@@ -9,6 +9,18 @@ use web_sys::{HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 
 // --- 数据结构 ---
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct ApiMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct ApiSession {
+    session_id: String,
+    created_at: String,
+    messages: Vec<ApiMessage>,
+}
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Message {
@@ -45,6 +57,64 @@ fn app() -> Html {
     let input_value = use_state(|| String::new());
     let is_loading = use_state(|| false);
     let selected_model_port = use_state(|| "8000".to_string());
+
+    // Fetch chat history on startup
+    {
+        let sessions = sessions.clone();
+
+        use_effect_with((), move |_| {
+            spawn_local(async move {
+                use gloo_net::http::Request;
+
+                if let Ok(resp) = Request::get("http://localhost:8001/history").send().await {
+                    if let Ok(api_sessions) = resp.json::<Vec<ApiSession>>().await {
+                        let mapped_sessions: Vec<Session> = api_sessions
+                            .into_iter()
+                            .map(|api| {
+                                // 🧠 pick a title from the first user message
+                                let raw_title = api
+                                    .messages
+                                    .iter()
+                                    .find(|m| m.role == "user")
+                                    .map(|m| {
+                                        m.content
+                                            .trim()
+                                            .split_whitespace()
+                                            .take(6) // first ~6 words
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                    })
+                                    .unwrap_or_else(|| "Chat history".to_string());
+
+                                let title: String = raw_title.chars().take(20).collect();
+
+                                let messages: Vec<Message> = api
+                                    .messages
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(idx, m)| Message {
+                                        id: format!("{}-{}", api.session_id, idx),
+                                        role: m.role,
+                                        content: m.content,
+                                    })
+                                    .collect();
+
+                                Session {
+                                    id: api.session_id,
+                                    title,
+                                    messages,
+                                }
+                            })
+                            .collect();
+
+                        sessions.set(mapped_sessions);
+                    }
+                }
+            });
+
+            || ()
+        });
+    }
 
     // 用于存储停止信号的发送端
     let abort_handle = use_mut_ref(|| None::<oneshot::Sender<()>>);
@@ -146,7 +216,15 @@ fn app() -> Html {
                 .find(|s| s.id == *current_session_id)
             {
                 if session.messages.is_empty() {
-                    session.title = prompt.chars().take(20).collect();
+                    // clean title: first few words, max 20 chars
+                    let title: String = prompt
+                        .trim()
+                        .split_whitespace()
+                        .take(6) // take first ~6 words
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    session.title = title.chars().take(20).collect();
                 }
                 session.messages.push(Message {
                     id: Uuid::new_v4().to_string(),
@@ -165,23 +243,26 @@ fn app() -> Html {
 
             // 准备异步任务
             let sessions = sessions.clone();
-            let current_session_id = current_session_id.clone();
+            let current_session_id_handle = current_session_id.clone();
             let is_loading = is_loading.clone();
             let mut local_sessions_buffer = current_sessions_list;
             let port = (*selected_model_port).clone();
+
+            // extract actual session_id String from state handle
+            let session_id = (*current_session_id_handle).clone();
 
             // 设置停止信号
             let (tx, rx) = oneshot::channel();
             *abort_handle.borrow_mut() = Some(tx);
 
-            // 🔥🔥 关键修复：在这里克隆 abort_handle 给异步任务使用 🔥🔥
-            // 这样原来的 abort_handle 仍然保留在闭包环境中，供下次点击使用
+            // 克隆 abort_handle 给异步任务使用
             let abort_handle = abort_handle.clone();
 
             spawn_local(async move {
                 let url = format!(
-                    "http://localhost:{}/chat/stream?prompt={}&max_tokens=200",
+                    "http://localhost:{}/chat/stream?session_id={}&prompt={}&max_tokens=200",
                     port,
+                    session_id,
                     urlencoding::encode(&prompt)
                 );
 
@@ -195,15 +276,15 @@ fn app() -> Html {
                         // Read chunks
                         while let Ok(Some((_, event))) = stream.try_next().await {
                             if let Some(data) = event.data().as_string() {
-                                // 🔚 1) Backend signalled completion
+                                // 1) Backend signalled completion
                                 if data.trim() == "[DONE]" {
                                     break;
                                 }
 
-                                // 🧠 2) Normal token chunk: append to last assistant message
+                                // 2) Normal token chunk: append to last assistant message
                                 if let Some(session) = local_sessions_buffer
                                     .iter_mut()
-                                    .find(|s| s.id == *current_session_id)
+                                    .find(|s| s.id == session_id)
                                 {
                                     if let Some(last_msg) = session.messages.last_mut() {
                                         last_msg.content.push_str(&data);
@@ -214,7 +295,7 @@ fn app() -> Html {
                         }
                     }
 
-                    // 🔒 Explicitly close EventSource so it stops auto-reconnecting
+                    // Explicitly close EventSource so it stops auto-reconnecting
                     let _ = es.close();
                 }
 
