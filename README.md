@@ -27,6 +27,8 @@ Key technical objectives include:
 
 
 ## 3. System Architecture
+
+### 3.1 High-Level Microservices Architecture
 The system follows a microservices-inspired architecture to ensure modularity and fault tolerance. The Frontend acts as an orchestrator, communicating with two independent inference backends via HTTP and Server-Sent Events (SSE).
 
 ```mermaid
@@ -42,21 +44,53 @@ graph TD
         Frontend --"SSE Stream (Port 8001)"--> Backend2[Qwen2 Service]
         
         Backend1 --"Candle Inference"--> Model1[TinyLlama Model]
+        Backend1 <--"SQLx"--> DB1[(SQLite Database)]
         Backend2 --"Candle Inference"--> Model2[Qwen2 Model]
-        Backend2 <--"SQLx"--> DB[(SQLite Database)]
+        Backend2 <--"SQLx"--> DB2[(SQLite Database)]
+        
     end
 ```
+
+### 3.2 Backend Internal Design (Concurrency Model)
+A critical challenge in local LLM inference is preventing the heavy computational load from blocking the web server's main thread. To solve this, we implemented a **Thread Isolation Strategy** within each backend service.
+
+As illustrated in the diagram below, we separate the **Async Web Layer** (Axum) from the **Blocking Inference Layer** (Candle) using `tokio::task::spawn_blocking`. This ensures that the server remains responsive to heartbeats and cancellation requests even while generating tokens.
+
+```mermaid
+graph LR
+    subgraph "Async Web Layer (Axum)"
+        A[Client Request] --> B(Handler)
+        B -- "spawn_blocking" --> C[Task Boundary]
+    end
+
+    subgraph "Blocking Inference Layer (CPU)"
+        C --> D{Model Inference}
+        D -- "Token Generation" --> E[Candle Engine]
+    end
+
+    subgraph "State Management"
+        E -.-> F[("TinyLlama
+        (Immutable / Arc)")]
+        E -.-> G[("Qwen2
+        (Mutable / Mutex)")]
+    end
+
+    E -- "Stream Token" --> B
+    B -- "SSE Event" --> A
+```
+
+**Key Implementation Details:**
+*   **Task Boundary:** The `spawn_blocking` function creates a bridge between the asynchronous event loop and the CPU-intensive model operations.
+*   **State Management Strategy:**
+    *   **TinyLlama:** Uses `Arc<Model>` (Atomic Reference Counting) for shared, read-only access, maximizing concurrent throughput.
+    *   **Qwen2:** Uses `Mutex<Model>` to safely handle mutable internal states (KV-Cache updates) required for its specific architecture.
+
 #### Technical Stack Highlights
 To achieve a fully local and high-performance system, we integrated the following technologies:
-
-*   **Local Execution:** Runs fully on local hardware (CPU) with no cloud dependencies.
 *   **Axum Backend:** RESTful API endpoints for session management and chat streaming.
-*   **Multi-Model Support:** Preloads **TinyLlama and Qwen2** models using the `Candle` framework.
-*   **Persistent Storage:** **SQLite** database (via `sqlx`) retains chat histories and model associations.
-*   **Streaming Responses:** Real-time token-by-token generation using Server-Sent Events (SSE).
-*   **Rust Frontend (Yew + WASM):** Interactive, type-safe interface compiled for the web.
-*   **Trunk Build System:** Enables fast iteration and automatic hot reload during development.
-*   **System Integration:** Utilized `gloo-net` and `web-sys` for robust WASM-to-Backend communication.
+*   **Candle Framework:** Rust-native tensor operations enabling "CPU-First" inference.
+*   **SQLx & SQLite:** Type-safe SQL queries for persistent storage.
+*   **Yew & Wasm:** A high-performance, event-driven frontend compiled to WebAssembly.
 
 
 ## 4. Features
@@ -64,7 +98,7 @@ The final deliverable includes the following key features:
 
 ### A. Dual-Model Backend Architecture
 We implemented two distinct backend services optimized for different tasks:
-1.  **TinyLlama Service (Port 8000):** A lightweight, stateless inference server running `TinyLlama-1.1B`. It is optimized for speed and quick interactions.
+1.  **TinyLlama Service (Port 8000):** A **lightweight** inference server running `TinyLlama-1.1B`. It is optimized for speed and quick interactions.
 2.  **Qwen2 Instruct Service (Port 8001):** A more capable reasoning server running `Qwen2.5-0.5B`. This service is integrated with a database to provide persistent chat history.
 
 ### B. Persistent Chat History (SQLite)
@@ -74,9 +108,9 @@ Unlike the initial proposal (which suggested PostgreSQL), we migrated to **SQLit
 
 ### C. Rust-Based Frontend (Yew + Wasm)
 The user interface is built entirely in Rust using the **Yew** framework.
-*   **In-Session Model Switching:** Users can dynamically toggle between "Llama 2" (Port 8000) and "Mistral/Qwen" (Port 8001) **within the same chat session**. This enables a hybrid workflow where a user can use the faster Llama model for simple greetings and seamlessly switch to the smarter Qwen model for complex queries without losing the conversation context.
+*   **Unified History Aggregation:** Since the system runs on two separate ports with independent databases, the frontend acts as an **Aggregator**. On startup, it asynchronously fetches chat history from both Port 8000 and Port 8001, merges the data, removes duplicates, and sorts them by timestamp. This provides the user with a seamless, unified view of their conversation history.
+*   **In-Session Model Switching:** Users can dynamically toggle between "Llama 2" (Port 8000) and "Mistral/Qwen" (Port 8001) **within the same chat session**.
 *   **Streaming UI:** The chat interface updates in real-time as tokens arrive via SSE, with support for stopping generation mid-stream.
-*   **Sidebar Navigation:** A history sidebar allows users to switch between different chat sessions seamlessly.
 
 ## 5. User’s Guide
 1.  **Launch the System:** Ensure both backends and the frontend are running (see Reproducibility Guide).
@@ -98,7 +132,7 @@ The user interface is built entirely in Rust using the **Yew** framework.
     ```
 
 ### Step 1: Setup Backend 1 (TinyLlama)
-1.  Navigate to the TinyLlama backend directory (assuming the code provided is in a folder named `backend_tinyllama`).
+1.  Navigate to the TinyLlama backend directory (folder named `server-llma2`).
 2.  Install Python dependencies and download the model:
     ```bash
     pip install huggingface_hub
@@ -113,7 +147,7 @@ The user interface is built entirely in Rust using the **Yew** framework.
 
 ### Step 2: Setup Backend 2 (Qwen2 + Database)
 1.  Open a **new terminal**.
-2.  Navigate to the Qwen2 backend directory (assuming folder `backend_qwen`).
+2.  Navigate to the Qwen2 backend directory (folder named `server-qwen`).
 3.  Download the model:
     ```bash
     python3 download_qwen_instruct.py
@@ -154,14 +188,15 @@ The user interface is built entirely in Rust using the **Yew** framework.
 **Note on Commit History:**
 During the development process, we utilized separate repositories for the Frontend and Backend components to facilitate parallel development and avoid merge conflicts. The repository submitted here represents the consolidated, final version of our project.
 
-## 7. Project Links
+## 8. Project Links
 
 We have prepared a video presentation and a live demo to showcase the project's functionality.
 
-*   **Video Slide Presentation:** [Insert Link Here]
+*   **Video Slide Presentation:** [View Presentation demo](https://drive.google.com/file/d/1bw2-PqUl0m4oMj0oTX0fDZdaEAkE3ls9/view?usp=sharing)
+
 *   **Video Demo:** [Insert Link Here]
 
-## 8. Lessons Learned & Concluding Remarks
+## 9. Lessons Learned & Concluding Remarks
 Throughout this project, we learned several valuable lessons about systems programming in Rust:
 
 1.  **The Rigor of Rust Development:** Rust is an incredibly strict and rigorous language, which made the development process significantly harder and more time-consuming compared to dynamic languages like Python. The strict ownership model and type system forced us to handle every memory allocation and potential error case explicitly. While this phase was difficult and steep, it ensured that our final application was robust and free of common runtime errors.
@@ -170,4 +205,8 @@ Throughout this project, we learned several valuable lessons about systems progr
 
 **Conclusion:**
 RusChat successfully demonstrates that Rust is a viable, high-performance alternative to Python for local AI applications. We achieved our goal of a private, offline-capable chat system with persistent history, proving that the Rust ecosystem (Axum, Candle, Yew, SQLx) is mature enough for complex full-stack AI development.
+
+
+
+
 
