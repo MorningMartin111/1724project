@@ -169,7 +169,7 @@ fn run_streaming_generation(
     let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p);
 
     let mut prev_text_len = 0usize;
-    let mut final_answer = String::new(); // what we’ll store in DB
+    let mut final_answer = String::new();
 
     let max_steps = params.max_tokens.min(256);
     println!("--> [TinyLlama] Entering generation loop (max_steps = {max_steps})...");
@@ -201,7 +201,6 @@ fn run_streaming_generation(
             let new_part = &full_text[prev_text_len..];
 
             if !new_part.is_empty() {
-                // append to final answer for DB
                 final_answer.push_str(new_part);
 
                 let event = Event::default().event("message").data(new_part.to_string());
@@ -214,7 +213,6 @@ fn run_streaming_generation(
             }
         }
 
-        // Stop conditions
         if next_token == eos_token {
             println!("--> [TinyLlama] Hit EOS, stopping generation");
             break;
@@ -225,7 +223,6 @@ fn run_streaming_generation(
         }
     }
 
-    // Final DONE event so frontend knows to stop
     let _ = tx.blocking_send(Ok(Event::default().event("message").data("[DONE]")));
     println!("--> [TinyLlama] Generation finished, sent [DONE]");
 
@@ -241,7 +238,6 @@ async fn chat_handler(
     }))
 }
 
-// Shared /history endpoint, same as Qwen
 async fn history_handler(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SessionWithMessages>>, axum::http::StatusCode> {
@@ -278,6 +274,6 @@ fn load_tinyllama_state(db_pool: DbPool) -> Result<AppState> {
         dtype,
         device,
         tokenizer: Arc::new(tokenizer),
-        db_pool, // store pool in state
+        db_pool,
     })
 }

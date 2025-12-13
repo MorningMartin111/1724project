@@ -30,7 +30,7 @@ struct AppState {
     dtype: DType,
     device: Device,
     tokenizer: Arc<Tokenizer>,
-    db_pool: DbPool, // NEW
+    db_pool: DbPool,
 }
 
 #[derive(Deserialize)]
@@ -42,7 +42,7 @@ struct ChatRequest {
 
 #[derive(Deserialize, Clone)]
 struct ChatStreamQuery {
-    pub session_id: String, // <-- NEW
+    pub session_id: String,
     pub prompt: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: usize,
@@ -59,14 +59,13 @@ fn default_max_tokens() -> usize {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // let state = load_qwen_state()?;
     let db_pool = init_db().await?;
     let state = load_qwen_state(db_pool)?;
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
-    // pass pool in
+
     let app = Router::new()
         .route("/chat", post(chat_handler))
         .route("/chat/stream", axum::routing::get(chat_stream_handler))
@@ -94,15 +93,11 @@ async fn chat_stream_handler(
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(16);
 
-    // clones for different uses
     let state_for_gen = state.clone();
     let params_for_gen = params.clone();
     let state_for_db = state.clone();
     let params_for_db = params.clone();
 
-    // CPU-bound generation in a blocking thread.
-    // IMPORTANT: the closure must *return* the result of run_streaming_generation_qwen
-    // so handle.await has type Result<anyhow::Result<String>, JoinError>.
     let handle =
         spawn_blocking(move || run_streaming_generation_qwen(state_for_gen, params_for_gen, tx));
 
@@ -274,7 +269,7 @@ fn load_qwen_state(db_pool: DbPool) -> Result<AppState> {
         dtype,
         device,
         tokenizer: Arc::new(tokenizer),
-        db_pool, // 🔹 store the pool
+        db_pool,
     })
 }
 

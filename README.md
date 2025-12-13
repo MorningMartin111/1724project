@@ -1,7 +1,7 @@
 # RusChat - A Local, Privacy-First LLM Inference Service
 
 ## Team Members
-*   **Ruoming Ren** (1005889013) - 
+*   **Ruoming Ren** (1005889013) - luke.ren@mail.utoronto.ca
 *   **Kairui Zhang** (1007114640) - kairui.zhang@mail.utoronto.ca
 
 ---
@@ -102,9 +102,11 @@ We implemented two distinct backend services optimized for different tasks:
 2.  **Qwen2 Instruct Service (Port 8001):** A more capable reasoning server running `Qwen2.5-0.5B`. This service is integrated with a database to provide persistent chat history.
 
 ### B. Persistent Chat History (SQLite)
-Unlike the initial proposal (which suggested PostgreSQL), we migrated to **SQLite** for the final implementation. SQLite provides a serverless, zero-configuration database engine that is perfect for a local desktop application, reducing the setup burden on the user.
-*   **Automatic Schema Creation:** The system automatically initializes `chat.db` and creates tables (`sessions`, `messages`) on startup.
-*   **History API:** The frontend fetches past conversations via the `/history` endpoint.
+We implemented two distinct backend services optimized for different tasks, and both integrate with SQLite for persistent local chat history.
+
+1. **TinyLlama Service (Port 8000):** A lightweight inference server running `TinyLlama-1.1B` for fast, low-latency interactions.
+2. **Qwen2 Instruct Service (Port 8001):** A stronger reasoning server running `Qwen2.5-0.5B` for more complex prompts and higher response quality.
+
 
 ### C. Rust-Based Frontend (Yew + Wasm)
 The user interface is built entirely in Rust using the **Yew** framework.
@@ -119,6 +121,10 @@ The user interface is built entirely in Rust using the **Yew** framework.
 4.  **Chat:** Type a message in the input box and press Enter or click the Send button.
 5.  **Stop Generation:** If the answer is too long, click the Red Stop button to interrupt the stream.
 6.  **View History:** Click "New Chat" to start fresh, or select a previous session from the left sidebar to load old messages.
+**Note:**  
+To guarantee that all components can be built and executed on personal machines, this project avoids using large or resource-intensive models.  
+The selected models prioritize deployability and low resource usage over advanced reasoning performance, as the focus of this course project is system architecture rather than model capability.
+
 
 ## 6. Reproducibility Guide
 **Note to Instructor:** Please follow these steps sequentially. We assume a standard environment with Rust and Python (for model downloading) installed.
@@ -205,8 +211,3 @@ Throughout this project, we learned several valuable lessons about systems progr
 
 **Conclusion:**
 RusChat successfully demonstrates that Rust is a viable, high-performance alternative to Python for local AI applications. We achieved our goal of a private, offline-capable chat system with persistent history, proving that the Rust ecosystem (Axum, Candle, Yew, SQLx) is mature enough for complex full-stack AI development.
-
-
-
-
-

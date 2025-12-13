@@ -22,11 +22,9 @@ pub struct SessionWithMessages {
 }
 
 pub async fn init_db() -> Result<DbPool> {
-    // --- Build absolute, safe SQLite file path ---
     let mut db_path = std::env::current_dir()?;
     db_path.push("chat.db");
 
-    // Ensure the directory exists
     if let Some(parent) = db_path.parent() {
         if !parent.exists() {
             println!("[DB] Creating directory: {:?}", parent);
@@ -34,17 +32,14 @@ pub async fn init_db() -> Result<DbPool> {
         }
     }
 
-    // Ensure the DB file exists (SQLite will open it, but creating removes ambiguity)
     if !db_path.exists() {
         println!("[DB] Creating empty DB file at {:?}", db_path);
         std::fs::File::create(&db_path)?;
     }
 
-    // Format SQLite URL properly → MUST be: sqlite:/absolute/path
     let db_url = format!("sqlite:{}", db_path.to_string_lossy());
     println!("[DB] Using SQLite URL: {}", db_url);
 
-    // Check file is writable (avoid macOS permission issues)
     if std::fs::OpenOptions::new()
         .write(true)
         .open(&db_path)
@@ -62,9 +57,6 @@ pub async fn init_db() -> Result<DbPool> {
         .connect(&db_url)
         .await?;
 
-    // --- Run migrations ---
-
-    // sessions table
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS sessions (
@@ -76,7 +68,6 @@ pub async fn init_db() -> Result<DbPool> {
     .execute(&pool)
     .await?;
 
-    // messages table
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS messages (
@@ -96,18 +87,12 @@ pub async fn init_db() -> Result<DbPool> {
     Ok(pool)
 }
 
-/// Save a single turn: user prompt + assistant reply.
-///
-/// This assumes:
-/// - `session_id` is provided by the frontend (e.g., your Yew `Session.id`)
-/// - One user message and one assistant message per turn
 pub async fn save_chat_turn(
     pool: &DbPool,
     session_id: &str,
     user_prompt: &str,
     assistant_reply: &str,
 ) -> Result<()> {
-    // 1) Ensure session row exists (no title anymore)
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO sessions (id)
@@ -118,7 +103,6 @@ pub async fn save_chat_turn(
     .execute(pool)
     .await?;
 
-    // 2) Insert user message
     sqlx::query(
         r#"
         INSERT INTO messages (session_id, role, content)
@@ -130,7 +114,6 @@ pub async fn save_chat_turn(
     .execute(pool)
     .await?;
 
-    // 3) Insert assistant message
     sqlx::query(
         r#"
         INSERT INTO messages (session_id, role, content)
@@ -146,7 +129,6 @@ pub async fn save_chat_turn(
 }
 
 pub async fn load_all_history(pool: &DbPool) -> Result<Vec<SessionWithMessages>> {
-    // 1. Load all sessions
     let sessions = sqlx::query(
         r#"
         SELECT id, created_at
@@ -159,7 +141,6 @@ pub async fn load_all_history(pool: &DbPool) -> Result<Vec<SessionWithMessages>>
 
     let mut result = Vec::new();
 
-    // 2. For each session, load its messages
     for session in sessions {
         let session_id: String = session.get("id");
         let created_at: String = session.get("created_at");

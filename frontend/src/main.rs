@@ -14,7 +14,7 @@ struct ApiMessage {
     role: String,
     content: String,
     #[serde(default)]
-    created_at: Option<String>, // from DB; optional so it won't break
+    created_at: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -57,8 +57,6 @@ fn app() -> Html {
     let is_loading = use_state(|| false);
     let selected_model_port = use_state(|| "8000".to_string());
 
-    // Fetch chat history on startup
-    // Fetch chat history on startup from BOTH servers (8000 + 8001)
     {
         let sessions = sessions.clone();
 
@@ -87,12 +85,10 @@ fn app() -> Html {
                 for mut s in history_8000.into_iter().chain(history_8001.into_iter()) {
                     map.entry(s.session_id.clone())
                         .and_modify(|existing| {
-                            // merge messages from both sources
                             let mut all = Vec::new();
                             all.extend(existing.messages.drain(..));
                             all.extend(s.messages.drain(..));
 
-                            // sort by created_at if present, otherwise keep order
                             all.sort_by(|a, b| {
                                 let a_ts = a.created_at.as_deref().unwrap_or("");
                                 let b_ts = b.created_at.as_deref().unwrap_or("");
@@ -106,14 +102,11 @@ fn app() -> Html {
 
                 let mut merged: Vec<ApiSession> = map.into_values().collect();
 
-                // 3) sort by created_at DESC (SQLite default format is lexicographically sortable)
                 merged.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-                // 4) map to UI Session structs
                 let mapped_sessions: Vec<Session> = merged
                     .into_iter()
                     .map(|api| {
-                        // title = first few words of first user message
                         let raw_title = api
                             .messages
                             .iter()
@@ -122,7 +115,7 @@ fn app() -> Html {
                                 m.content
                                     .trim()
                                     .split_whitespace()
-                                    .take(6) // first ~6 words
+                                    .take(6)
                                     .collect::<Vec<_>>()
                                     .join(" ")
                             })
@@ -149,7 +142,6 @@ fn app() -> Html {
                     })
                     .collect();
 
-                // If DB is empty, keep the default "New Chat" session
                 if !mapped_sessions.is_empty() {
                     sessions.set(mapped_sessions);
                 }
@@ -242,18 +234,16 @@ fn app() -> Html {
                 return;
             }
 
-            // UI 更新
             let mut current_sessions_list = (*sessions).clone();
             if let Some(session) = current_sessions_list
                 .iter_mut()
                 .find(|s| s.id == *current_session_id)
             {
                 if session.messages.is_empty() {
-                    // clean title: first few words, max 20 chars
                     let title: String = prompt
                         .trim()
                         .split_whitespace()
-                        .take(6) // take first ~6 words
+                        .take(6)
                         .collect::<Vec<_>>()
                         .join(" ");
 
@@ -298,20 +288,15 @@ fn app() -> Html {
 
                 // Create EventSource
                 if let Ok(mut es) = EventSource::new(&url) {
-                    // Subscribe to the "message" event
                     if let Ok(stream) = es.subscribe("message") {
-                        // Stop reading when rx is fired (Stop button) OR when stream finishes
                         let mut stream = stream.take_until(rx);
 
-                        // Read chunks
                         while let Ok(Some((_, event))) = stream.try_next().await {
                             if let Some(data) = event.data().as_string() {
-                                // 1) Backend signalled completion
                                 if data.trim() == "[DONE]" {
                                     break;
                                 }
 
-                                // 2) Normal token chunk: append to last assistant message
                                 if let Some(session) = local_sessions_buffer
                                     .iter_mut()
                                     .find(|s| s.id == session_id)
@@ -325,11 +310,9 @@ fn app() -> Html {
                         }
                     }
 
-                    // Explicitly close EventSource so it stops auto-reconnecting
                     let _ = es.close();
                 }
 
-                // UI clean-up
                 is_loading.set(false);
                 *abort_handle.borrow_mut() = None;
             });
@@ -337,11 +320,11 @@ fn app() -> Html {
     };
 
     let on_keydown = {
-        Callback::from(move |e: KeyboardEvent| {
-            if e.key() == "Enter" && !e.shift_key() {
-                // e.prevent_default();
-            }
-        })
+        Callback::from(
+            move |e: KeyboardEvent| {
+                if e.key() == "Enter" && !e.shift_key() {}
+            },
+        )
     };
 
     let sidebar_list_view = sessions.iter().map(|session| {
