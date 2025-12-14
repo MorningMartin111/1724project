@@ -98,8 +98,8 @@ The final deliverable includes the following key features:
 
 ### A. Dual-Model Backend Architecture
 We implemented two distinct backend services optimized for different tasks:
-1.  **TinyLlama Service (Port 8000):** A **lightweight** inference server running `TinyLlama-1.1B`. It is optimized for speed and quick interactions.
-2.  **Qwen2 Instruct Service (Port 8001):** A more capable reasoning server running `Qwen2.5-0.5B`. This service is integrated with a database to provide persistent chat history.
+1.  **TinyLlama Service (Port 8000):** A **lightweight** inference server running `TinyLlama-1.1B`.
+2.  **Qwen2 Instruct Service (Port 8001):** A more capable reasoning server running `Qwen2.5-0.5B`.
 
 ### B. Persistent Chat History (SQLite)
 We implemented two distinct backend services optimized for different tasks, and both integrate with SQLite for persistent local chat history.
