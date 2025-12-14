@@ -200,7 +200,7 @@ We have prepared a video presentation and a live demo to showcase the project's 
 
 *   **Video Slide Presentation:** [View Presentation demo](https://drive.google.com/file/d/1bw2-PqUl0m4oMj0oTX0fDZdaEAkE3ls9/view?usp=sharing)
 
-*   **Video Demo:** [Insert Link Here]
+*   **Video Demo:** [Video Demo](https://drive.google.com/file/d/1YgHhj80ZOFma8xy8l_P0080sJi6wJwBM/view?usp=sharing)
 
 ## 9. Lessons Learned & Concluding Remarks
 Throughout this project, we learned several valuable lessons about systems programming in Rust:
