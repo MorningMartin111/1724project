@@ -21,7 +21,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use candle_core::{Error as CandleError, IndexOp, Result as CandleResult};
 use tower_http::cors::{Any, CorsLayer};
 
-// --- DB module (shared with Qwen server) ---
 mod db;
 use crate::db::{load_all_history, save_chat_turn, SessionWithMessages};
 use db::{init_db, DbPool};
@@ -33,7 +32,7 @@ struct AppState {
     dtype: DType,
     device: Device,
     tokenizer: Arc<Tokenizer>,
-    db_pool: DbPool, // NEW
+    db_pool: DbPool,
 }
 
 #[derive(Deserialize)]
@@ -45,7 +44,7 @@ struct ChatRequest {
 
 #[derive(Deserialize, Clone)]
 struct ChatStreamQuery {
-    pub session_id: String, // NEW: matches Qwen server
+    pub session_id: String,
     pub prompt: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: usize,
@@ -62,7 +61,6 @@ fn default_max_tokens() -> usize {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Same as Qwen: init DB first, then pass pool into load_tinyllama_state
     let db_pool = init_db().await?;
     let state = load_tinyllama_state(db_pool)?;
 
@@ -74,7 +72,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/chat", post(chat_handler))
         .route("/chat/stream", axum::routing::get(chat_stream_handler))
-        .route("/history", axum::routing::get(history_handler)) // NEW
+        .route("/history", axum::routing::get(history_handler))
         .layer(cors)
         .with_state(state);
 
@@ -98,19 +96,14 @@ async fn chat_stream_handler(
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(16);
 
-    // clones for different uses
     let state_for_gen = state.clone();
     let params_for_gen = params.clone();
     let state_for_db = state.clone();
     let params_for_db = params.clone();
 
-    // CPU-bound generation in a blocking thread.
-    // The closure returns the result of run_streaming_generation so that
-    // handle.await has type Result<anyhow::Result<String>, JoinError>.
     let handle =
         spawn_blocking(move || run_streaming_generation(state_for_gen, params_for_gen, tx));
 
-    // Async task that waits for generation to finish, then saves to DB.
     tokio::spawn(async move {
         match handle.await {
             // handle.await : Result<anyhow::Result<String>, JoinError>
@@ -159,7 +152,6 @@ fn run_streaming_generation(
         .map_err(candle_core::Error::msg)?;
     let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
 
-    // EOS token (fallback to 2)
     let eos_token = tokenizer.get_vocab(true).get("</s>").copied().unwrap_or(2);
 
     let mut start_pos: usize = 0;
