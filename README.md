@@ -104,10 +104,6 @@ We implemented two distinct backend services optimized for different tasks:
 ### B. Persistent Chat History (SQLite)
 We implemented two distinct backend services optimized for different tasks, and both integrate with SQLite for persistent local chat history.
 
-1. **TinyLlama Service (Port 8000):** A lightweight inference server running `TinyLlama-1.1B` for fast, low-latency interactions.
-2. **Qwen2 Instruct Service (Port 8001):** A stronger reasoning server running `Qwen2.5-0.5B` for more complex prompts and higher response quality.
-
-
 ### C. Rust-Based Frontend (Yew + Wasm)
 The user interface is built entirely in Rust using the **Yew** framework.
 *   **Unified History Aggregation:** Since the system runs on two separate ports with independent databases, the frontend acts as an **Aggregator**. On startup, it asynchronously fetches chat history from both Port 8000 and Port 8001, merges the data, removes duplicates, and sorts them by timestamp. This provides the user with a seamless, unified view of their conversation history.
