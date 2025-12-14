@@ -113,7 +113,7 @@ The user interface is built entirely in Rust using the **Yew** framework.
 ## 5. User’s Guide
 1.  **Launch the System:** Ensure both backends and the frontend are running (see Reproducibility Guide).
 2.  **Access the UI:** Open your browser to `http://localhost:8080`.
-3.  **Select a Model:** Use the dropdown in the top-left corner to choose a model backend (Port 8000 for fast chat, Port 8001 for history-enabled chat).
+3.  **Select a Model:** Use the dropdown in the top-left corner to choose a model backend.
 4.  **Chat:** Type a message in the input box and press Enter or click the Send button.
 5.  **Stop Generation:** If the answer is too long, click the Red Stop button to interrupt the stream.
 6.  **View History:** Click "New Chat" to start fresh, or select a previous session from the left sidebar to load old messages.
