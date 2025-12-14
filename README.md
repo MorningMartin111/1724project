@@ -138,7 +138,7 @@ The selected models prioritize deployability and low resource usage over advance
     ```
 
 ### Step 1: Setup Backend 1 (TinyLlama)
-1.  Navigate to the TinyLlama backend directory (folder named `server-llma2`).
+1.  Navigate to the TinyLlama backend directory (folder named `server-llama2`).
 2.  Install Python dependencies and download the model:
     ```bash
     pip install huggingface_hub
@@ -177,7 +177,7 @@ The selected models prioritize deployability and low resource usage over advance
 ### Step 4: Verification
 *   **Test 1:** Select "Llama 2 (Port 8000)" in the UI dropdown. Type "Hello". You should see a streaming response.
 *   **Test 2:** Select "Mistral (Port 8001)" (mapped to Qwen internally). Type "Tell me a story". You should see a response.
-*   **Test 3:** Refresh the page. You should see the "Tell me a story" session appear in the History sidebar (loaded from SQLite).
+*   **Test 3:** Refresh the page. You should see the both sessions appear in the History sidebar (loaded from SQLite).
 
 ## 7. Contributions
 
