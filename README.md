@@ -117,6 +117,7 @@ The user interface is built entirely in Rust using the **Yew** framework.
 4.  **Chat:** Type a message in the input box and press Enter or click the Send button.
 5.  **Stop Generation:** If the answer is too long, click the Red Stop button to interrupt the stream.
 6.  **View History:** Click "New Chat" to start fresh, or select a previous session from the left sidebar to load old messages.
+   
 **Note:**  
 To guarantee that all components can be built and executed on personal machines, this project avoids using large or resource-intensive models.  
 The selected models prioritize deployability and low resource usage over advanced reasoning performance, as the focus of this course project is system architecture rather than model capability.
